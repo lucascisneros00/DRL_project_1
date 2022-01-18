@@ -5,7 +5,7 @@ import numpy as np
 import random
 import math
 
-class BaseEnv(Env):
+class BaseEnv01(Env):
     """
     Description:
         An agent receives a monotonic income path (y) at each step of his life (episode
@@ -216,7 +216,7 @@ class BaseEnv02(Env):
             if self.steps<self.total_steps:
                 reward = -50*self.total_steps  # The agent didn't finish his life period
             else:
-                if savings<0: reward = savings*self.total_steps  # The agent MUST pay his debts at the end of his lifetime (No-Ponzi)
+                if savings<0: reward = -50*self.total_steps  # The agent MUST pay his debts at the end of his lifetime (No-Ponzi)
 
         self.state = (savings)
         info = {}

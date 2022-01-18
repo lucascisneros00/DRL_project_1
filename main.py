@@ -1,4 +1,7 @@
-#******************** 0. DEPENDENCIES & HYPERPARAMETERS ***********************
+#============== DEEP RL IN A BASIC MACROECONOMIC MODEL =================
+
+#==== 0. DEPENDENCIES 
+from numpy.core.fromnumeric import mean, var
 import pandas as pd
 import numpy as np
 import seaborn as sns
@@ -7,97 +10,196 @@ from stable_baselines3.sac.policies import MlpPolicy
 import tensorflow as tf
 from torch import nn
 from stable_baselines3 import SAC, PPO, DDPG, A2C
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, base_vec_env
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnRewardThreshold
 from stable_baselines3.common.monitor import Monitor
 import gym
 import os
 import yaml
+pd.set_option('display.max_rows', 500)
+sns.set_theme(palette="viridis")
 
-from env import BaseEnv, BaseEnv02
+from env import BaseEnv01, BaseEnv02
 
-#*********************** 1. ENDOGENOUS INCOME **************************
 
-# TRAINING 
-# ========
+#==== 1. ENDOGENOUS INCOME 
+# TRAINING
+# Environment parameters
 TOTAL_STEPS = 10
 interest_rates = [1/99, 101/99, -49/99] # ß(1+r) = 1, 2, 0.5
 models = [PPO]
-income_paths = [1, 0, -1] 
+income_paths = [1, 0, -1]
+variables = ['Consumption', 'Labor', 'Savings']
+trained_models = []
+
+# Training parameters
+TOTAL_TIMESTEPS = 1e5
 
 log_path = os.path.join('training', 'logs')
 save_path = os.path.join('training', 'saved_models')
 
-for i in range(len(interest_rates)):
+def instantiate_env(interest_rate, total_steps):
     # Instantiating our environment
-    env = BaseEnv02(interest_rate=interest_rates[i]
-                    ,total_steps=TOTAL_STEPS
+    env = BaseEnv02(interest_rate,
+                    total_steps
                     )
     env = Monitor(env)
     env = DummyVecEnv([lambda: env])
     env.reset()
+    return env
 
+def instantiate_model(env):
     # Instantiating our agent
-    model = PPO(env=env
-            ,gamma=0.99     # Discount factor
-            ,verbose=0
-            ,tensorboard_log=log_path
-            ,policy='MlpPolicy'
+    model = PPO(env=env,
+            gamma=0.99,     # Discount factor
+            verbose=0,
+            #tensorboard_log=log_path,
+            policy='MlpPolicy',
             #**config['PPO_base_hyper']          
             )
-    
-    # Training our model
-        # Path
-    best_model_path = os.path.join(save_path, f'PPO_base_env02_r_{interest_rates[i]}')
-    os.makedirs(best_model_path, exist_ok=True)
+    return model
 
-    eval_callback = EvalCallback(env
-                                ,eval_freq=1e5
-                                ,best_model_save_path=best_model_path
-                                ,verbose=0)
-        # Training
-    model.learn(total_timesteps=1e7
-                ,callback=eval_callback    )
+def train_model(model,env,
+                total_timesteps=TOTAL_TIMESTEPS,
+                save_path=''
+                ):
+    # Callback
+    eval_callback = EvalCallback(env,
+                                eval_freq=1e5,
+                                best_model_save_path=save_path,
+                                verbose=0
+                                )
+    # Training
+    model.learn(total_timesteps=total_timesteps,
+                callback=eval_callback
+                )
+    return model
+
+# Looping for Instantiating and training
+for i in range(len(interest_rates)):
+    # Path
+    best_model_path = os.path.join(save_path, f'PPO_base_env02_r_{interest_rates[i]:.2f}')
+    os.makedirs(best_model_path, exist_ok=True)
+    
+    env = instantiate_env(interest_rates[i], TOTAL_STEPS)
+    model = instantiate_model(env)
+    trained_model = train_model(model,env,
+                                total_timesteps=TOTAL_TIMESTEPS,
+                                save_path=best_model_path
+                                )
+    trained_models.append(trained_model)
+
 
 # TESTING 
-# =======
-for i in range(len(interest_rates)):
-    # Instantiating our environment
-    env = BaseEnv02(interest_rate=interest_rates[i]
-                    ,total_steps=TOTAL_STEPS
-                    )
-    env = Monitor(env)
-    env = DummyVecEnv([lambda: env])
-    env.reset()
-            
+def test_model(model_path, env):
     # Loading our agent
-    best_model_path = os.path.join(save_path, f'PPO_base_env02_r_{interest_rates[i]}', 'best_model')
-    model = PPO.load(best_model_path
-        , env=env)
+    model = PPO.load(model_path,
+                    env=env
+                    )
+    #Testing
     mean_reward, std_reward = evaluate_policy(model=model, env=env, n_eval_episodes=10, deterministic=True)
-    print(mean_reward)
-    # obs = env.reset()
-    # for i in range(TOTAL_STEPS):
-    #     action, _states = model.predict(obs, deterministic=True)
-    #     obs, rewards, dones, info = env.step(action)
-    #     print(action)
+    print(f'\nMean reward: {mean_reward}')
+    print('=========\n')
+    obs = env.reset()
+    for i in range(TOTAL_STEPS):
+        action, _states = model.predict(obs, deterministic=True)
+        obs, rewards, dones, info = env.step(action)
+        print(action)
+    return
 
+# Looping for Testing
+for i in range(len(interest_rates)):
+    # Path
+    best_model_path = os.path.join(save_path, f'PPO_base_env02_r_{interest_rates[i]:.2f}', 'best_model')
 
-# PREPROCESS FOR PLOTTING
-# =======================
+    env = instantiate_env(interest_rates[i], TOTAL_STEPS)
+    test_model(best_model_path, env)
+
+# GENERATING PATHS/PREPROCESSING FOR PLOTTING
 def fill_list_with_blanks(x, episode_length):
     for _ in range(episode_length):
         if len(x)<episode_length:
-            x.append(0)             # For now 0=None
+            x.append(None)
     return x
 
-NUM_OBS = 10
-TOTAL_STEPS = 10
-variables = ['Consumption', 'Labor', 'Savings']
-interest_rates = [1/99, 101/99, -49/99] # ß(1+r) = 1, 2, 0.5
-models = [PPO]
+def get_paths(model_path, env):
+    paths = [ [] for _ in range(3) ] #[Consumption, Labor, Savings]
+    # Loading our agent
+    model = PPO.load(model_path,
+                    env=env
+                    )
+    obs = env.reset()
+    done = False
+    paths[0].append(None)     #Consumption
+    paths[1].append(None)     #Labor
+    paths[2].append(0)        #Savings
 
+    for t in range(TOTAL_STEPS):  #To account for termination step
+        action, _states = model.predict(obs, deterministic=False)       # Because of bootstrap
+        obs, reward, done, info = env.step(action)
+        paths[0].append(action[0][0])                # Double wrapped in DummyVecEnv
+        paths[1].append(action[0][1])
+        if t==TOTAL_STEPS:
+            paths[2].append(info[0]['terminal_observation'][0])
+        else:
+            paths[2].append(obs[0][0])  
+
+    paths = [fill_list_with_blanks(path, TOTAL_STEPS+1) for path in paths]
+    return paths
+
+# SIMULATE 100 INDIVIDUALS 
+df_simulation = pd.DataFrame()
+NUM_SIMULATIONS = 100
+for s in range(NUM_SIMULATIONS):
+    # Get consumption/labor/savings paths for each individual
+    df = [None] * len(interest_rates)
+    for i in range(len(interest_rates)):
+        # Path
+        best_model_path = os.path.join(save_path, f'PPO_base_env02_r_{interest_rates[i]:.2f}', 'best_model')
+
+        env = instantiate_env(interest_rates[i], TOTAL_STEPS)
+        paths = get_paths(best_model_path, env)
+        # Appending to dataframe at the individual level 
+        df[i] = pd.DataFrame(np.array(paths).T)
+        df[i].columns = [f'Consumption_{interest_rates[i]:.2f}', f'Labor_{interest_rates[i]:.2f}', f'Savings_{interest_rates[i]:.2f}']
+
+    # Concatenating and reshaping
+    df_concat = pd.concat(df, axis=1)
+    df_concat['time_step'] = df_concat.index
+    df_long = pd.wide_to_long(df_concat, variables, i = 'time_step', j='int_rate', sep='_', suffix='(.*)').reset_index()
+    df_long = pd.melt(df_long, id_vars=['time_step', 'int_rate'], value_vars=variables,
+                            var_name='var_type', value_name='Value' )    #[time_step, int_rate, var_type, Value]
+    df_long['ID'] = s   # Individual identifier
+    df_simulation = df_simulation.append(df_long)
+
+df_simulation = df_simulation[['ID', 'time_step', 'int_rate', 'var_type', 'Value']]
+
+# PLOTTING
+palette = sns.color_palette("mako_r")
+
+g = sns.FacetGrid(df_simulation, col='int_rate', hue='var_type')
+g.map(sns.lineplot,
+        'time_step', 'Value'
+        #palette = palette
+        
+    )
+plt.gca().invert_yaxis()
+plt.show()
+
+# Falta compararlo con los paths de Euler, y compararar las utilidades descontadas
+## ACA ME QUEDE
+
+
+
+
+
+
+
+
+
+
+# Final dataframe
 column_names = ['ID', 'step', 'var_type', 'int_rate', 'Model', 'Value']
 
 df = pd.DataFrame(None, index=np.arange(NUM_OBS*(TOTAL_STEPS+1)*len(variables)*len(interest_rates)*len(models)), columns=column_names)
@@ -114,7 +216,7 @@ for i in range(ID):
 
 matrix = np.zeros_like(df)
 
-y = [a for a in range(5)]           ## ACA ME QUEDE <------ 
+y = [a for a in range(5)]          
 asd = [[x for x in range(2)] for _ in y]
 np.array(asd).flatten()
 df.unstack().reset_index() ## USAR ESTO !!! osea crear la base normal y luego hacer este reshape long para los plots
@@ -224,7 +326,7 @@ df.pivot_table(index=["ID", "step"],
                     values='grade')
 
 # PLOTTING
-# ========
+
 palette = sns.color_palette("mako_r", 6)
 y_plot = list([df.columns[4], df.columns[5]])
 list('PPO_')
